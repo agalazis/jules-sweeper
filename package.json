@@ -1,0 +1,27 @@
+{
+  "name": "jules-sweeper",
+  "version": "1.0.0",
+  "description": "Containerized command-line utility to identify and prune stale tasks from Google Jules repositories",
+  "type": "module",
+  "main": "src/index.ts",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node --experimental-strip-types src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "jules",
+    "sweeper",
+    "cleaner",
+    "automation",
+    "ci-cd"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}
