@@ -31,7 +31,8 @@ RUN npm install -g @google/jules
 COPY --from=builder /app/package.json /app/tsconfig.json ./
 COPY --from=builder /app/src ./src
 
-# Set production environment
+# Ensure global npm binaries and current working directory are in PATH
+ENV PATH="/usr/local/bin:/usr/local/share/npm-global/bin:${PATH}"
 ENV NODE_ENV=production
 
 # Native TypeScript execution using Node.js 22 type-stripping (--experimental-strip-types)

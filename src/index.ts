@@ -95,9 +95,18 @@ async function runJulesCommand(args: string[]): Promise<string> {
     });
     return stdout;
   } catch (err: unknown) {
-    // Fallback to executing via npx if 'jules' global binary is not found directly
-    const execErr = err as { code?: string; stderr?: string; message?: string };
-    if (execErr.code === 'ENOENT') {
+    const execErr = err as { code?: string | number; stderr?: string; message?: string };
+    const errText = String(execErr.stderr || execErr.message || err);
+
+    // Check if error is due to 'jules' binary not being found in PATH
+    const isNotFound =
+      execErr.code === 'ENOENT' ||
+      execErr.code === 127 ||
+      errText.includes('not found') ||
+      errText.includes('ENOENT') ||
+      errText.includes('127');
+
+    if (isNotFound) {
       try {
         const { stdout } = await execFileAsync('npx', ['-y', '@google/jules', ...args], {
           env: process.env,
@@ -109,7 +118,7 @@ async function runJulesCommand(args: string[]): Promise<string> {
         throw new Error(subErr.stderr || subErr.message || String(npxErr));
       }
     }
-    throw new Error(execErr.stderr || execErr.message || String(err));
+    throw new Error(errText);
   }
 }
 
