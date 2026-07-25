@@ -9,6 +9,9 @@ interface Task {
   name?: string;
   sessionId?: string;
   taskId?: string;
+  repo?: string;
+  repository?: string;
+  repoName?: string;
   status?: string;
   state?: string;
   updatedAt?: string | number;
@@ -25,12 +28,14 @@ function showHelp(): void {
 jules-sweeper - Automated Google Jules Task Cleanup Utility
 
 Usage:
-  jules-sweeper <owner/repo> [options]
-  jules-sweeper [options] --repo <owner/repo>
+  jules-sweeper <owner/repo|all> [options]
+  jules-sweeper [options] --repo <owner/repo|all>
+  jules-sweeper [options] --all-repos
 
 Options & Flags:
-  <positional>       Target Google Jules repository in owner/repo format.
+  <positional>       Target repository (owner/repo) or "all" to target all repositories.
   -r, --repo         Alternative named flag for target repository.
+  -a, --all-repos    Target all connected Google Jules repositories.
   -s, --status       Task status to filter against (default: "completed").
                      Options: completed, failed, cancelled, all, etc.
   -h, --hours        Retention threshold in hours (default: 48).
@@ -49,6 +54,11 @@ function getTaskId(task: Task): string | null {
     return id.trim();
   }
   return null;
+}
+
+function getTaskRepo(task: Task): string {
+  const repo = task.repo || task.repository || task.repoName || 'unknown';
+  return String(repo);
 }
 
 function getTaskStatus(task: Task): string {
@@ -109,6 +119,8 @@ async function main(): Promise<void> {
     parsedArgs = parseArgs({
       options: {
         repo: { type: 'string', short: 'r' },
+        'all-repos': { type: 'boolean', short: 'a', default: false },
+        all: { type: 'boolean', default: false },
         status: { type: 'string', short: 's', default: 'completed' },
         hours: { type: 'string', short: 'h', default: '48' },
         'dry-run': { type: 'boolean', default: false },
@@ -131,10 +143,15 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const targetRepo = (positionals[0] || values.repo) as string | undefined;
+  const positionalArg = positionals[0] as string | undefined;
+  const repoFlag = values.repo as string | undefined;
 
-  if (!targetRepo || targetRepo.trim() === '') {
-    console.error('[FATAL] Missing required target repository. Provide positional argument <owner/repo> or --repo flag.');
+  const isAllFlag = Boolean(values['all-repos']) || Boolean(values.all);
+  const targetArg = (positionalArg || repoFlag || '').trim();
+  const isAllRepos = isAllFlag || targetArg.toLowerCase() === 'all' || targetArg === '*';
+
+  if (!isAllRepos && (!targetArg || targetArg === '')) {
+    console.error('[FATAL] Missing required target repository. Provide positional argument <owner/repo>, --repo flag, or --all-repos.');
     showHelp();
     process.exit(1);
   }
@@ -152,16 +169,20 @@ async function main(): Promise<void> {
   const cutoffDateIso = new Date(cutoffMs).toISOString();
 
   console.log(`[INFO] jules-sweeper initialized`);
-  console.log(`[INFO] Target Repository: ${targetRepo}`);
+  console.log(`[INFO] Target Repository: ${isAllRepos ? 'ALL REPOSITORIES' : targetArg}`);
   console.log(`[INFO] Status Filter: ${targetStatus}`);
   console.log(`[INFO] Retention Threshold: ${hoursNum} hours (Cutoff: ${cutoffDateIso})`);
   console.log(`[INFO] Mode: ${isDryRun ? 'DRY-RUN (no deletions will be executed)' : 'LIVE (deletion mode)'}`);
 
   // Query remote tasks
-  console.log(`[INFO] Executing remote query: jules remote list --repo ${targetRepo} --json`);
+  const queryArgs = isAllRepos
+    ? ['remote', 'list', '--session', '--json']
+    : ['remote', 'list', '--repo', targetArg, '--json'];
+
+  console.log(`[INFO] Executing remote query: jules ${queryArgs.join(' ')}`);
   let queryOutput: string;
   try {
-    queryOutput = await runJulesCommand(['remote', 'list', '--repo', targetRepo, '--json']);
+    queryOutput = await runJulesCommand(queryArgs);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[FATAL] Failed to list remote tasks: ${msg}`);
@@ -191,12 +212,13 @@ async function main(): Promise<void> {
   console.log(`[INFO] Total tasks fetched: ${tasks.length}`);
 
   // Filter tasks
-  const candidateTasks: { task: Task; id: string; timestamp: number; dateIso: string; status: string }[] = [];
+  const candidateTasks: { task: Task; id: string; repo: string; timestamp: number; dateIso: string; status: string }[] = [];
 
   for (const task of tasks) {
     const taskId = getTaskId(task);
     if (!taskId) continue;
 
+    const taskRepo = getTaskRepo(task);
     const taskStatus = getTaskStatus(task);
     const taskTimestamp = getTaskTimestamp(task);
 
@@ -207,6 +229,7 @@ async function main(): Promise<void> {
       candidateTasks.push({
         task,
         id: taskId,
+        repo: taskRepo,
         timestamp: taskTimestamp,
         dateIso: new Date(taskTimestamp).toISOString(),
         status: taskStatus,
@@ -227,6 +250,7 @@ async function main(): Promise<void> {
     console.table(
       candidateTasks.map((c) => ({
         ID: c.id,
+        Repository: c.repo,
         Status: c.status,
         UpdatedAt: c.dateIso,
       }))
@@ -238,7 +262,7 @@ async function main(): Promise<void> {
     let failedCount = 0;
 
     for (const candidate of candidateTasks) {
-      console.log(`[LIVE] Deleting task ${candidate.id} (Status: ${candidate.status}, UpdatedAt: ${candidate.dateIso})...`);
+      console.log(`[LIVE] Deleting task ${candidate.id} (${candidate.repo !== 'unknown' ? `Repo: ${candidate.repo}, ` : ''}Status: ${candidate.status}, UpdatedAt: ${candidate.dateIso})...`);
       try {
         await runJulesCommand(['remote', 'delete', candidate.id]);
         console.log(`[SUCCESS] Task ${candidate.id} deleted successfully.`);
