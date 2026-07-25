@@ -87,6 +87,70 @@ function getTaskTimestamp(task: Task): number {
   return isNaN(parsed) ? 0 : parsed;
 }
 
+function parseRelativeTimeMs(timeStr: string): number {
+  const now = Date.now();
+  const match = timeStr.trim().match(/(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago/i);
+  if (!match) return 0;
+  const num = parseInt(match[1], 10);
+  const unit = match[2].toLowerCase();
+
+  let mult = 1000;
+  if (unit === 'minute') mult = 60 * 1000;
+  else if (unit === 'hour') mult = 3600 * 1000;
+  else if (unit === 'day') mult = 24 * 3600 * 1000;
+  else if (unit === 'week') mult = 7 * 24 * 3600 * 1000;
+  else if (unit === 'month') mult = 30 * 24 * 3600 * 1000;
+  else if (unit === 'year') mult = 365 * 24 * 3600 * 1000;
+
+  return now - num * mult;
+}
+
+function parseTextTable(output: string): Task[] {
+  const lines = output
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  const tasks: Task[] = [];
+
+  for (const line of lines) {
+    if (line.includes('ID') && line.includes('Status')) continue;
+
+    // Line starts with 10-25 digit session ID
+    const match = line.match(/^(\d{10,25})\s+(.+)$/);
+    if (!match) continue;
+
+    const id = match[1];
+    const rest = match[2];
+
+    // Status is at the end of the line
+    const statusMatch = rest.match(/(Completed|In Progress|Failed|Cancelled|Active|Pending)\s*$/i);
+    const status = statusMatch ? statusMatch[1] : 'unknown';
+    const beforeStatus = statusMatch ? rest.slice(0, statusMatch.index).trim() : rest;
+
+    // Relative time is before status
+    const timeMatch = beforeStatus.match(/(\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago)\s*$/i);
+    const relativeTimeStr = timeMatch ? timeMatch[1] : '';
+    const updatedAtMs = relativeTimeStr ? parseRelativeTimeMs(relativeTimeStr) : 0;
+    const beforeTime = timeMatch ? beforeStatus.slice(0, timeMatch.index).trim() : beforeStatus;
+
+    // Repo is before relative time
+    const repoMatch = beforeTime.match(/([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(?:…|\.\.\.)?)\s*$/);
+    const repo = repoMatch ? repoMatch[1] : 'unknown';
+    const description = repoMatch ? beforeTime.slice(0, repoMatch.index).trim() : beforeTime;
+
+    tasks.push({
+      id,
+      name: description,
+      repo,
+      status,
+      updatedAt: updatedAtMs > 0 ? updatedAtMs : undefined,
+    });
+  }
+
+  return tasks;
+}
+
 async function runJulesCommand(args: string[]): Promise<string> {
   try {
     const { stdout } = await execFileAsync('jules', args, {
@@ -184,9 +248,7 @@ async function main(): Promise<void> {
   console.log(`[INFO] Mode: ${isDryRun ? 'DRY-RUN (no deletions will be executed)' : 'LIVE (deletion mode)'}`);
 
   // Query remote tasks
-  const queryArgs = isAllRepos
-    ? ['remote', 'list', '--session', '--json']
-    : ['remote', 'list', '--repo', targetArg, '--json'];
+  const queryArgs = ['remote', 'list', '--session'];
 
   console.log(`[INFO] Executing remote query: jules ${queryArgs.join(' ')}`);
   let queryOutput: string;
@@ -212,10 +274,9 @@ async function main(): Promise<void> {
         tasks = [rawParsed];
       }
     }
-  } catch (err: unknown) {
-    console.error(`[FATAL] Failed to parse JSON response from jules remote list: ${err instanceof Error ? err.message : String(err)}`);
-    console.error(`Raw output received: ${queryOutput}`);
-    process.exit(1);
+  } catch {
+    // If JSON parsing fails (jules remote list outputs text table), parse text table output
+    tasks = parseTextTable(queryOutput);
   }
 
   console.log(`[INFO] Total tasks fetched: ${tasks.length}`);
@@ -230,6 +291,15 @@ async function main(): Promise<void> {
     const taskRepo = getTaskRepo(task);
     const taskStatus = getTaskStatus(task);
     const taskTimestamp = getTaskTimestamp(task);
+
+    // Repository match filter if not targeting all repos
+    if (!isAllRepos) {
+      const repoNormalized = taskRepo.toLowerCase().replace(/[\.…]+$/, '');
+      const targetNormalized = targetArg.toLowerCase();
+      if (repoNormalized !== 'unknown' && !repoNormalized.startsWith(targetNormalized.slice(0, 10))) {
+        continue;
+      }
+    }
 
     const matchesStatus = targetStatus === 'all' || taskStatus === targetStatus;
     const isStale = taskTimestamp > 0 && taskTimestamp < cutoffMs;
