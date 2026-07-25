@@ -11,15 +11,17 @@
 - **Safe Previews**: Includes `--dry-run` mode to preview candidate deletions before mutating state.
 - **Docker Ready**: Pre-packaged Docker image based on `node:22-alpine` with system-level `git`, `curl`, and global `@google/jules`.
 
-## Usage
+## Quick Start (Docker Container)
 
-### Command Line Interface
+Run directly using the GitHub Container Registry image:
 
 ```bash
-jules-sweeper <owner/repo> [options]
+docker run --rm \
+  -e JULES_API_KEY="$JULES_API_KEY" \
+  ghcr.io/agalazis/jules-sweeper:latest owner/repo --status completed --hours 48 --dry-run
 ```
 
-### Options & Flags
+## Options & Flags
 
 | Flag | Short | Type | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -34,7 +36,7 @@ jules-sweeper <owner/repo> [options]
 
 - `JULES_API_KEY`: Headless authentication token passed into the execution environment to authorize `@google/jules` CLI operations without interactive browser authentication.
 
-## Development
+## Local Development
 
 ```bash
 # Typecheck TypeScript source
