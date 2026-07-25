@@ -6,9 +6,9 @@ WORKDIR /app
 # Install system dependencies
 RUN apk add --no-cache git curl gcompat libc6-compat
 
-# Install devDependencies for type checking
-COPY package.json tsconfig.json ./
-RUN npm install
+# Install all dependencies for type checking
+COPY package.json package-lock.json tsconfig.json ./
+RUN npm ci
 
 # Copy source
 COPY src/ ./src
@@ -21,14 +21,18 @@ FROM node:22-alpine AS runner
 
 WORKDIR /app
 
-# Install required system tools git, curl, and glibc compatibility libs for @google/jules
+# Install required system tools git, curl, and glibc compatibility libs for @google/jules CLI fallback
 RUN apk add --no-cache git curl gcompat libc6-compat
 
-# Global NPM installation of @google/jules inside container
+# Global NPM installation of @google/jules inside container for CLI fallback
 RUN npm install -g @google/jules
 
-# Copy application files
-COPY --from=builder /app/package.json /app/tsconfig.json ./
+# Install production dependencies (@google/jules-sdk)
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+# Copy application source files
+COPY --from=builder /app/tsconfig.json ./
 COPY --from=builder /app/src ./src
 
 # Set production environment

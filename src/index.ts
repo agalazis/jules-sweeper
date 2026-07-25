@@ -1,26 +1,16 @@
 #!/usr/bin/env node
 import { parseArgs, promisify } from 'node:util';
 import { execFile } from 'node:child_process';
+import { connect, type SessionResource } from '@google/jules-sdk';
 
 const execFileAsync = promisify(execFile);
 
 interface Task {
-  id?: string;
+  id: string;
   name?: string;
-  sessionId?: string;
-  taskId?: string;
-  repo?: string;
-  repository?: string;
-  repoName?: string;
-  status?: string;
-  state?: string;
-  updatedAt?: string | number;
-  updated_at?: string | number;
-  updateTime?: string | number;
-  createdAt?: string | number;
-  created_at?: string | number;
-  createTime?: string | number;
-  [key: string]: unknown;
+  repo: string;
+  status: string;
+  updatedAt: number;
 }
 
 function showHelp(): void {
@@ -44,47 +34,8 @@ Options & Flags:
       --help         Display this help message.
 
 Environment Variables:
-  JULES_API_KEY      Headless authentication token for @google/jules CLI operations.
+  JULES_API_KEY      Headless authentication token for @google/jules SDK & CLI operations.
 `);
-}
-
-function getTaskId(task: Task): string | null {
-  const id = task.id || task.taskId || task.sessionId || task.name;
-  if (typeof id === 'string' && id.trim().length > 0) {
-    return id.trim();
-  }
-  return null;
-}
-
-function getTaskRepo(task: Task): string {
-  const repo = task.repo || task.repository || task.repoName || 'unknown';
-  return String(repo);
-}
-
-function getTaskStatus(task: Task): string {
-  const status = task.status || task.state || 'unknown';
-  return String(status).toLowerCase();
-}
-
-function getTaskTimestamp(task: Task): number {
-  const rawTime =
-    task.updatedAt ??
-    task.updated_at ??
-    task.updateTime ??
-    task.createdAt ??
-    task.created_at ??
-    task.createTime;
-
-  if (rawTime === undefined || rawTime === null) {
-    return 0;
-  }
-
-  if (typeof rawTime === 'number') {
-    return rawTime;
-  }
-
-  const parsed = Date.parse(String(rawTime));
-  return isNaN(parsed) ? 0 : parsed;
 }
 
 function parseRelativeTimeMs(timeStr: string): number {
@@ -116,25 +67,21 @@ function parseTextTable(output: string): Task[] {
   for (const line of lines) {
     if (line.includes('ID') && line.includes('Status')) continue;
 
-    // Line starts with 10-25 digit session ID
     const match = line.match(/^(\d{10,25})\s+(.+)$/);
     if (!match) continue;
 
     const id = match[1];
     const rest = match[2];
 
-    // Status is at the end of the line
     const statusMatch = rest.match(/(Completed|In Progress|Failed|Cancelled|Active|Pending)\s*$/i);
-    const status = statusMatch ? statusMatch[1] : 'unknown';
+    const status = statusMatch ? statusMatch[1].toLowerCase() : 'unknown';
     const beforeStatus = statusMatch ? rest.slice(0, statusMatch.index).trim() : rest;
 
-    // Relative time is before status
     const timeMatch = beforeStatus.match(/(\d+\s+(?:second|minute|hour|day|week|month|year)s?\s+ago)\s*$/i);
     const relativeTimeStr = timeMatch ? timeMatch[1] : '';
     const updatedAtMs = relativeTimeStr ? parseRelativeTimeMs(relativeTimeStr) : 0;
     const beforeTime = timeMatch ? beforeStatus.slice(0, timeMatch.index).trim() : beforeStatus;
 
-    // Repo is before relative time
     const repoMatch = beforeTime.match(/([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(?:…|\.\.\.)?)\s*$/);
     const repo = repoMatch ? repoMatch[1] : 'unknown';
     const description = repoMatch ? beforeTime.slice(0, repoMatch.index).trim() : beforeTime;
@@ -144,11 +91,57 @@ function parseTextTable(output: string): Task[] {
       name: description,
       repo,
       status,
-      updatedAt: updatedAtMs > 0 ? updatedAtMs : undefined,
+      updatedAt: updatedAtMs,
     });
   }
 
   return tasks;
+}
+
+async function fetchTasksViaSdk(apiKey: string): Promise<Task[]> {
+  const client = connect({ apiKey });
+  const sdkSessions = await client.sessions().all();
+  const tasks: Task[] = [];
+
+  for (const sess of sdkSessions) {
+    const rawSess = sess as unknown as SessionResource & Record<string, unknown>;
+    const rawId = String(rawSess.id || rawSess.name || '').replace(/^sessions\//, '');
+    if (!rawId) continue;
+
+    const status = String(rawSess.state || rawSess.status || 'unknown').toLowerCase();
+
+    let updatedAt = 0;
+    const timeVal = rawSess.updateTime || rawSess.createTime || rawSess.updatedAt || rawSess.createdAt;
+    if (typeof timeVal === 'number') {
+      updatedAt = timeVal;
+    } else if (timeVal) {
+      const parsed = Date.parse(String(timeVal));
+      if (!isNaN(parsed)) updatedAt = parsed;
+    }
+
+    let repo = 'unknown';
+    const sourceCtx = rawSess.sourceContext as { source?: string } | undefined;
+    if (sourceCtx && typeof sourceCtx.source === 'string') {
+      repo = sourceCtx.source.replace(/^sources\/github\//, '').replace(/^sources\//, '');
+    }
+
+    tasks.push({
+      id: rawId,
+      name: String(rawSess.title || rawSess.prompt || ''),
+      repo,
+      status,
+      updatedAt,
+    });
+  }
+
+  return tasks;
+}
+
+async function deleteTaskViaSdk(apiKey: string, taskId: string): Promise<void> {
+  const client = connect({ apiKey });
+  const resourceName = taskId.startsWith('sessions/') ? taskId : `sessions/${taskId}`;
+  const clientWithApi = client as unknown as { apiClient: { request: (endpoint: string, options?: unknown) => Promise<unknown> } };
+  await clientWithApi.apiClient.request(resourceName, { method: 'DELETE' });
 }
 
 async function runJulesCommand(args: string[]): Promise<string> {
@@ -162,7 +155,6 @@ async function runJulesCommand(args: string[]): Promise<string> {
     const execErr = err as { code?: string | number; stderr?: string; message?: string };
     const errText = String(execErr.stderr || execErr.message || err);
 
-    // Check if error is due to 'jules' binary not being found in PATH
     const isNotFound =
       execErr.code === 'ENOENT' ||
       execErr.code === 127 ||
@@ -183,6 +175,28 @@ async function runJulesCommand(args: string[]): Promise<string> {
       }
     }
     throw new Error(errText);
+  }
+}
+
+async function fetchTasksViaCli(): Promise<Task[]> {
+  const queryOutput = await runJulesCommand(['remote', 'list', '--session']);
+  try {
+    const rawParsed = JSON.parse(queryOutput);
+    let items: Record<string, unknown>[] = [];
+    if (Array.isArray(rawParsed)) {
+      items = rawParsed;
+    } else if (rawParsed && typeof rawParsed === 'object') {
+      items = (rawParsed.tasks || rawParsed.sessions || [rawParsed]) as Record<string, unknown>[];
+    }
+    return items.map((item) => ({
+      id: String(item.id || item.taskId || item.sessionId || '').replace(/^sessions\//, ''),
+      name: String(item.name || item.title || ''),
+      repo: String(item.repo || item.repository || 'unknown'),
+      status: String(item.status || item.state || 'unknown').toLowerCase(),
+      updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : Date.parse(String(item.updatedAt || 0)) || 0,
+    }));
+  } catch {
+    return parseTextTable(queryOutput);
   }
 }
 
@@ -237,6 +251,8 @@ async function main(): Promise<void> {
 
   const targetStatus = (values.status as string).trim().toLowerCase();
   const isDryRun = Boolean(values['dry-run']);
+  const apiKey = process.env.JULES_API_KEY;
+
   const now = Date.now();
   const cutoffMs = now - hoursNum * 3_600_000;
   const cutoffDateIso = new Date(cutoffMs).toISOString();
@@ -245,54 +261,37 @@ async function main(): Promise<void> {
   console.log(`[INFO] Target Repository: ${isAllRepos ? 'ALL REPOSITORIES' : targetArg}`);
   console.log(`[INFO] Status Filter: ${targetStatus}`);
   console.log(`[INFO] Retention Threshold: ${hoursNum} hours (Cutoff: ${cutoffDateIso})`);
+  console.log(`[INFO] Execution Engine: ${apiKey ? '@google/jules-sdk (Native TypeScript SDK)' : '@google/jules (CLI Fallback)'}`);
   console.log(`[INFO] Mode: ${isDryRun ? 'DRY-RUN (no deletions will be executed)' : 'LIVE (deletion mode)'}`);
 
-  // Query remote tasks
-  const queryArgs = ['remote', 'list', '--session'];
-
-  console.log(`[INFO] Executing remote query: jules ${queryArgs.join(' ')}`);
-  let queryOutput: string;
-  try {
-    queryOutput = await runJulesCommand(queryArgs);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[FATAL] Failed to list remote tasks: ${msg}`);
-    process.exit(1);
-  }
-
+  // Fetch tasks using SDK if API key is present, otherwise CLI fallback
   let tasks: Task[] = [];
-  try {
-    const rawParsed = JSON.parse(queryOutput);
-    if (Array.isArray(rawParsed)) {
-      tasks = rawParsed;
-    } else if (rawParsed && typeof rawParsed === 'object') {
-      if (Array.isArray(rawParsed.tasks)) {
-        tasks = rawParsed.tasks;
-      } else if (Array.isArray(rawParsed.sessions)) {
-        tasks = rawParsed.sessions;
-      } else {
-        tasks = [rawParsed];
-      }
+  if (apiKey) {
+    try {
+      console.log(`[INFO] Querying remote tasks via @google/jules-sdk...`);
+      tasks = await fetchTasksViaSdk(apiKey);
+    } catch (sdkErr: unknown) {
+      console.warn(`[WARN] SDK query failed: ${sdkErr instanceof Error ? sdkErr.message : String(sdkErr)}. Falling back to CLI query...`);
+      tasks = await fetchTasksViaCli();
     }
-  } catch {
-    // If JSON parsing fails (jules remote list outputs text table), parse text table output
-    tasks = parseTextTable(queryOutput);
+  } else {
+    console.log(`[INFO] Executing remote query via CLI: jules remote list --session`);
+    tasks = await fetchTasksViaCli();
   }
 
   console.log(`[INFO] Total tasks fetched: ${tasks.length}`);
 
-  // Filter tasks
+  // Filter candidate tasks
   const candidateTasks: { task: Task; id: string; repo: string; timestamp: number; dateIso: string; status: string }[] = [];
 
   for (const task of tasks) {
-    const taskId = getTaskId(task);
-    if (!taskId) continue;
+    if (!task.id) continue;
 
-    const taskRepo = getTaskRepo(task);
-    const taskStatus = getTaskStatus(task);
-    const taskTimestamp = getTaskTimestamp(task);
+    const taskRepo = task.repo;
+    const taskStatus = task.status.toLowerCase();
+    const taskTimestamp = task.updatedAt;
 
-    // Repository match filter if not targeting all repos
+    // Filter by repository if not targeting all repos
     if (!isAllRepos) {
       const repoNormalized = taskRepo.toLowerCase().replace(/[\.…]+$/, '');
       const targetNormalized = targetArg.toLowerCase();
@@ -307,7 +306,7 @@ async function main(): Promise<void> {
     if (matchesStatus && isStale) {
       candidateTasks.push({
         task,
-        id: taskId,
+        id: task.id,
         repo: taskRepo,
         timestamp: taskTimestamp,
         dateIso: new Date(taskTimestamp).toISOString(),
@@ -343,7 +342,11 @@ async function main(): Promise<void> {
     for (const candidate of candidateTasks) {
       console.log(`[LIVE] Deleting task ${candidate.id} (${candidate.repo !== 'unknown' ? `Repo: ${candidate.repo}, ` : ''}Status: ${candidate.status}, UpdatedAt: ${candidate.dateIso})...`);
       try {
-        await runJulesCommand(['remote', 'delete', candidate.id]);
+        if (apiKey) {
+          await deleteTaskViaSdk(apiKey, candidate.id);
+        } else {
+          await runJulesCommand(['remote', 'delete', candidate.id]);
+        }
         console.log(`[SUCCESS] Task ${candidate.id} deleted successfully.`);
         deletedCount++;
       } catch (err: unknown) {

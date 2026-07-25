@@ -16,10 +16,14 @@
     "sweeper",
     "cleaner",
     "automation",
-    "ci-cd"
+    "ci-cd",
+    "sdk"
   ],
   "author": "",
   "license": "MIT",
+  "dependencies": {
+    "@google/jules-sdk": "^0.2.0"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0"
