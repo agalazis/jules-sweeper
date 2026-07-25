@@ -1,16 +1,16 @@
 # jules-sweeper
 
-`jules-sweeper` is a lightweight, containerized CLI utility engineered to identify and prune stale tasks from target Google Jules repositories. It automates repository maintenance in CI/CD environments or scheduled cron jobs by filtering tasks against a configurable hour-based retention window and status criteria.
+`jules-sweeper` is a lightweight, containerized CLI utility built with Node.js 22 and the official **`@google/jules-sdk`**. It identifies and prunes stale tasks from Google Jules repositories based on retention hours and status criteria.
 
 ## Features
 
-- **Native Node.js 22 TypeScript**: Runs `.ts` files natively using Node.js 22 `--experimental-strip-types`. Zero transpilation steps (`tsc`, `esbuild`, or `babel`) required.
-- **Zero Runtime Dependencies**: Built entirely using Node.js standard libraries (`node:util`, `node:child_process`).
+- **Pure TypeScript SDK**: Powered 100% natively by `@google/jules-sdk`. Zero CLI spawning, zero binary compatibility overhead, and zero third-party shell execution.
+- **Native Node.js 22 Execution**: Runs `.ts` files natively using Node.js 22 type-stripping (`--experimental-strip-types`). No build or transpilation step (`tsc`/`esbuild`) required.
 - **Flexible Retention Window**: Configurable retention threshold in hours (`--hours`, default: `48`).
 - **Status Filtering**: Filter candidate tasks by status (`completed`, `failed`, `cancelled`, or `all`).
-- **All Repositories Support**: Target a single repository (`owner/repo`) or all repositories (`all` / `--all-repos`).
+- **All Repositories Support**: Target a single repository (`owner/repo`) or all connected repositories (`all` / `--all-repos`).
 - **Safe Previews**: Includes `--dry-run` mode to preview candidate deletions before mutating state.
-- **Docker Ready**: Pre-packaged Docker image based on `node:22-alpine` with system-level `git`, `curl`, and global `@google/jules`.
+- **Ultra-Minimal Docker Container**: Lightweight Alpine Linux container packaging using `@google/jules-sdk`.
 
 ## Quick Start (Docker Container)
 
@@ -40,9 +40,9 @@ docker run --rm \
 | `--dry-run` | — | boolean | `false` | When present, previews candidate tasks without issuing deletion commands. |
 | `--help` | — | boolean | — | Display help information. |
 
-## Environment & Authentication
+## Environment Variables
 
-- `JULES_API_KEY`: Headless authentication token passed into the execution environment to authorize `@google/jules` CLI operations without interactive browser authentication.
+- `JULES_API_KEY`: Required. Headless authentication token for Google Jules API operations.
 
 ## Local Development
 
@@ -51,8 +51,8 @@ docker run --rm \
 npm run typecheck
 
 # Run locally using Node 22 native type-stripping
-npm start -- owner/repo --dry-run
-npm start -- --all-repos --dry-run
+JULES_API_KEY="$JULES_API_KEY" npm start -- owner/repo --dry-run
+JULES_API_KEY="$JULES_API_KEY" npm start -- --all-repos --dry-run
 ```
 
 ## License
